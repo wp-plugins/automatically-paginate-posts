@@ -1,11 +1,11 @@
 <?php
 /*
 Plugin Name: Automatically Paginate Posts
-Plugin URI: http://www.thinkoomph.com/plugins-modules/automatically-paginate-posts/
+Plugin URI: http://www.oomphinc.com/plugins-modules/automatically-paginate-posts/
 Description: Automatically inserts the &lt;!--nextpage--&gt; Quicktag into WordPress posts, pages, or custom post type content.
-Version: 0.1
+Version: 0.2
 Author: Erick Hitter & Oomph, Inc.
-Author URI: http://www.thinkoomph.com/
+Author URI: http://www.oomphinc.com/
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -30,11 +30,17 @@ class Automatically_Paginate_Posts {
 	private $post_types_default = array( 'post' );
 
 	private $num_pages;
-	private $num_pages_default = 2;
+	private $paging_type_default = 'pages';
+	private $num_pages_default   = 2;
+	private $num_words_default   = '';
 
-	//Ensure option names match values in this::uninstall
-	private $option_name_post_types = 'autopaging_post_types';
-	private $option_name_num_pages = 'autopaging_num_pages';
+	private $paging_types_allowed = array( 'pages', 'words' );
+
+	// Ensure option names match values in this::uninstall
+	private $option_name_post_types  = 'autopaging_post_types';
+	private $option_name_paging_type = 'pages';
+	private $option_name_num_pages   = 'autopaging_num_pages';
+	private $option_name_num_words   = 'autopaging_num_words';
 
 	private $meta_key_disable_autopaging = '_disable_autopaging';
 
@@ -74,7 +80,12 @@ class Automatically_Paginate_Posts {
 		//Number of pages to break over
 		$this->num_pages = absint( apply_filters( 'autopaging_num_pages_default', get_option( $this->option_name_num_pages, $this->num_pages_default ) ) );
 		if ( 0 == $this->num_pages )
-			$this->num_pages = 2;
+			$this->num_pages = $this->num_pages_default;
+
+		//Number of words to break over
+		$this->num_words = absint( apply_filters( 'autopaging_num_words_default', get_option( $this->option_name_num_words, $this->num_words_default ) ) );
+		if ( 0 == $this->num_words )
+			$this->num_words = $this->num_words_default;
 	}
 
 	/**
@@ -87,7 +98,9 @@ class Automatically_Paginate_Posts {
 	 */
 	public function uninstall() {
 		delete_option( 'autopaging_post_types' );
+		delete_option( 'autopaging_paging_type' );
 		delete_option( 'autopaging_num_pages' );
+		delete_option( 'autopaging_num_words' );
 	}
 
 	/**
@@ -114,11 +127,13 @@ class Automatically_Paginate_Posts {
 	 */
 	public function action_admin_init() {
 		register_setting( 'reading', $this->option_name_post_types, array( $this, 'sanitize_supported_post_types' ) );
+		register_setting( 'reading', $this->option_name_paging_type, array( $this, 'sanitize_paging_type' ) );
 		register_setting( 'reading', $this->option_name_num_pages, array( $this, 'sanitize_num_pages' ) );
+		register_setting( 'reading', $this->option_name_num_words, array( $this, 'sanitize_num_words' ) );
 
 		add_settings_section( 'autopaging', __( 'Automatically Paginate Posts', 'autopaging' ), '__return_false', 'reading' );
 		add_settings_field( 'autopaging-post-types', __( 'Supported post types:', 'autopaging' ), array( $this, 'settings_field_post_types' ), 'reading', 'autopaging' );
-		add_settings_field( 'autopaging-num-pages', __( 'Number of pages to split content into:', 'autopaging' ), array( $this, 'settings_field_num_pages' ), 'reading', 'autopaging' );
+		add_settings_field( 'autopaging-paging-type', __( 'Split post by:', 'autopaging' ), array( $this, 'settings_field_paging_type' ), 'reading', 'autopaging' );
 	}
 
 	/**
@@ -142,7 +157,7 @@ class Automatically_Paginate_Posts {
 		//Output checkboxes
 		foreach ( $post_types as $post_type => $atts ) :
 		?>
-			<input type="checkbox" name="<?php echo esc_attr( $this->option_name_post_types ); ?>[]" id="post-type-<?php echo esc_attr( $post_type ); ?>" value="<?php echo esc_attr( $post_type ); ?>"<?php checked( in_array( $post_type, $current_types ) ); ?> /> <label for="post-type-<?php echo esc_attr( $post_type ); ?>"><?php echo esc_html( $atts->label ); ?><br />
+			<input type="checkbox" name="<?php echo esc_attr( $this->option_name_post_types ); ?>[]" id="post-type-<?php echo esc_attr( $post_type ); ?>" value="<?php echo esc_attr( $post_type ); ?>"<?php checked( in_array( $post_type, $current_types ) ); ?> /> <label for="post-type-<?php echo esc_attr( $post_type ); ?>"><?php echo esc_html( $atts->label ); ?></label><br />
 		<?php
 		endforeach;
 	}
@@ -178,6 +193,45 @@ class Automatically_Paginate_Posts {
 	}
 
 	/**
+	 * Render option to choose paging type and options for that type
+	 *
+	 * @uses get_option()
+	 * @uses esc_attr()
+	 * @uses checked()
+	 * @return string
+	 */
+	public function settings_field_paging_type() {
+		$paging_type = get_option( $this->option_name_paging_type, $this->paging_type_default );
+		if ( ! in_array( $paging_type, $this->paging_types_allowed ) ) {
+			$paging_type = $this->paging_type_default;
+		}
+
+		$labels = array(
+			'pages' => __( 'Total number of pages: ', 'autopaging' ),
+			'words' => __( 'Approximate words per page: ', 'autopaging' ),
+		);
+
+		foreach ( $this->paging_types_allowed as $type ) :
+			$type_escaped = esc_attr( $type );
+			$func = 'settings_field_num_' . $type;
+			?>
+			<p><input type="radio" name="<?php echo esc_attr( $this->option_name_paging_type ); ?>" id="autopaging-type-<?php echo $type_escaped; ?>" value="<?php echo $type_escaped; ?>"<?php checked( $type, $paging_type ); ?> /> <label for="autopaging-type-<?php echo $type_escaped; ?>">
+				<strong><?php echo $labels[ $type ]; ?></strong><?php $this->{$func}(); ?>
+			</label></p>
+		<?php endforeach;
+	}
+
+	/**
+	 * Validate chosen paging type against allowed values
+	 *
+	 * @param string
+	 * @return string
+	 */
+	public function sanitize_paging_type( $type ) {
+		return in_array( $type, $this->paging_types_allowed ) ? $type : $this->paging_type_default;
+	}
+
+	/**
 	 * Render dropdown for choosing number of pages to break content over
 	 *
 	 * @uses get_option, apply_filters, esc_attr, selected
@@ -205,6 +259,38 @@ class Automatically_Paginate_Posts {
 	 */
 	public function sanitize_num_pages( $num_pages ) {
 		return max( 2, min( intval( $num_pages ), apply_filters( 'autopaging_max_num_pages', 10 ) ) );
+	}
+
+	/**
+	 * Render input field for specifying approximate number of words each page should contain
+	 *
+	 * @uses get_option, apply_filters, esc_attr, selected
+	 * @return string
+	 */
+	public function settings_field_num_words() {
+		$num_words = apply_filters( 'autopaging_num_words', get_option( $this->option_name_num_words ) )
+		?>
+			<input name="<?php echo esc_attr( $this->option_name_num_words ); ?>" value="<?php echo esc_attr( $num_words ); ?>" size="4" />
+
+			<p class="description"><?php _e( 'If chosen, each page will contain approximately this many words, depending on paragraph lengths.', 'autopaging' ); ?></p>
+		<?php
+	}
+
+	/**
+	 * Sanitize number of words input. No fewer than 10 by default, filterable by autopaging_max_num_words
+	 *
+	 * @param int $num_words
+	 * @uses apply_filters
+	 * @return int
+	 */
+	public function sanitize_num_words( $num_words ) {
+		$num_words = absint( $num_words );
+
+		if ( ! $num_words ) {
+			return 0;
+		}
+
+		return max( $num_words, apply_filters( 'autopaging_min_num_words', 10 ) );
 	}
 
 	/**
@@ -275,8 +361,9 @@ class Automatically_Paginate_Posts {
 				if ( in_array( $the_post->post_type, $this->post_types ) && ! preg_match( '#<!--nextpage-->#i', $the_post->post_content ) && ! (bool) get_post_meta( $the_post->ID, $this->meta_key_disable_autopaging, true ) ) {
 					//In-time filtering of number of pages to break over, based on post data. If value is less than 2, nothing should be done.
 					$num_pages = absint( apply_filters( 'autopaging_num_pages', absint( $this->num_pages ), $the_post ) );
+					$num_words = absint( apply_filters( 'autopaging_num_words', absint( $this->num_words ), $the_post ) );
 
-					if ( $num_pages < 2 )
+					if ( $num_pages < 2 && empty( $num_words ) )
 						continue;
 
 					//Start with post content, but alias to protect the raw content.
@@ -291,32 +378,70 @@ class Automatically_Paginate_Posts {
 
 					//Keep going, if we have something to count.
 					if ( is_int( $count ) && 0 < $count ) {
-						//Explode content at double line breaks
+						//Explode content at double (or more) line breaks
 						$content = explode( "\r\n\r\n", $content );
 
-						//Count number of paragraphs content was exploded to
-						$count = count( $content );
+						switch ( get_option( $this->option_name_paging_type, $this->paging_type_default ) ) {
+							case 'words' :
+								$word_counter = 0;
 
-						//Determine when to insert Quicktag
-						$insert_every = $count / $num_pages;
-						$insert_every_rounded = round( $insert_every );
+								// Count words per paragraph and break after the paragraph that exceeds the set threshold
+								foreach ( $content as $index => $paragraph ) {
+									$paragraph_words = count( preg_split( '/\s+/', strip_tags( $paragraph ) ) );
+									$word_counter += $paragraph_words;
 
-						//If number of pages is greater than number of paragraphs, put each paragraph on its own page
-						if ( $num_pages > $count )
-							$insert_every_rounded = 1;
+									if ( $word_counter >= $num_words ) {
+										$content[ $index ] .= '<!--nextpage-->';
+										$word_counter = 0;
+									} else {
+										continue;
+									}
+								}
 
-						//Set initial counter position.
-						$i = $count - 1 == $num_pages ? 2 : 1;
+								unset( $word_counter );
+								unset( $index );
+								unset( $paragraph );
+								unset( $paragraph_words );
 
-						//Loop through content pieces and append Quicktag as is appropriate
-						foreach( $content as $key => $value ) {
-							if ( $key + 1 == $count )
 								break;
 
-							if ( ( $key + 1 ) == ( $i * $insert_every_rounded ) ) {
-								$content[ $key ] = $content[ $key ] . '<!--nextpage-->';
-								$i++;
-							}
+							case 'pages' :
+							default :
+								//Count number of paragraphs content was exploded to
+								$count = count( $content );
+
+								//Determine when to insert Quicktag
+								$insert_every = $count / $num_pages;
+								$insert_every_rounded = round( $insert_every );
+
+								//If number of pages is greater than number of paragraphs, put each paragraph on its own page
+								if ( $num_pages > $count ) {
+									$insert_every_rounded = 1;
+								}
+
+								//Set initial counter position.
+								$i = $count - 1 == $num_pages ? 2 : 1;
+
+								//Loop through content pieces and append Quicktag as is appropriate
+								foreach ( $content as $key => $value ) {
+									if ( $key + 1 == $count ) {
+										break;
+									}
+
+									if ( ( $key + 1 ) == ( $i * $insert_every_rounded ) ) {
+										$content[ $key ] = $content[ $key ] . '<!--nextpage-->';
+										$i++;
+									}
+								}
+
+								//Clean up
+								unset( $count );
+								unset( $insert_every );
+								unset( $insert_every_rounded );
+								unset( $key );
+								unset( $value );
+
+								break;
 						}
 
 						//Reunite content
@@ -324,17 +449,11 @@ class Automatically_Paginate_Posts {
 
 						//And, overwrite the original content
 						$the_post->post_content = $content;
-
-						//Clean up
-						unset( $count );
-						unset( $insert_every );
-						unset( $insert_every_rounded );
-						unset( $key );
-						unset( $value );
 					}
 
 					//Lastly, clean up.
 					unset( $num_pages );
+					unset( $num_words );
 					unset( $content );
 					unset( $count );
 				}
